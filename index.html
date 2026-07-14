@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>坤坤的 Sodium MC 启动器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            background-color: #90EE90;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #main-screen {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            padding-top: 18vh;
+        }
+
+        .title {
+            color: #FFFFFF;
+            font-size: 2.2rem;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 40px;
+            text-shadow: 0 0 20px rgba(255,255,255,0.9), 0 0 40px rgba(255,255,255,0.6);
+            line-height: 1.3;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .title .emoji-fire {
+            filter: brightness(3) saturate(0) drop-shadow(0 0 8px #FFFFFF) drop-shadow(0 0 16px #FFFFFF);
+            display: inline-block;
+        }
+
+        .version-select {
+            background: rgba(255,255,255,0.1);
+            border: 2px solid #FFFFFF;
+            color: #FFFFFF;
+            font-size: 1.1rem;
+            padding: 12px 24px;
+            border-radius: 10px;
+            cursor: pointer;
+            outline: none;
+            margin-bottom: 25px;
+            height: 48px;
+            line-height: 1;
+            appearance: none;
+            -webkit-appearance: none;
+            text-align: center;
+            text-align-last: center;
+            min-width: 180px;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .version-select option {
+            background: #2d5a27;
+            color: #FFFFFF;
+            text-align: center;
+        }
+
+        .launch-btn {
+            background: rgba(255,255,255,0.08);
+            border: 2px solid #FFFFFF;
+            color: #FFFFFF;
+            font-size: 1.2rem;
+            font-weight: 600;
+            padding: 12px 50px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            height: 48px;
+            line-height: 1;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+
+        .launch-btn:hover {
+            background: rgba(255,255,255,0.25);
+        }
+
+        .launch-btn:active {
+            background: rgba(255,255,255,0.4);
+            transform: scale(0.96);
+        }
+
+        #loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #90EE90;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 100;
+        }
+
+        #loading-screen.show {
+            opacity: 1;
+        }
+
+        .studio-name {
+            color: #FFFFFF;
+            font-size: 2.8rem;
+            font-weight: bold;
+            text-shadow: 0 0 30px rgba(255,255,255,1), 0 0 60px rgba(255,255,255,0.7);
+            margin-bottom: 25px;
+            text-align: center;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .loading-text {
+            color: #FFFFFF;
+            font-size: 1.15rem;
+            text-shadow: 0 0 12px rgba(255,255,255,0.9);
+            text-align: center;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #game-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            z-index: 50;
+            background: #000;
+        }
+
+        #game-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        #float-ball {
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.15);
+            border: 2px solid #FFFFFF;
+            color: #FFFFFF;
+            font-size: 0.85rem;
+            font-weight: bold;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            cursor: pointer;
+            z-index: 200;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            box-shadow: 0 0 15px rgba(255,255,255,0.3);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            line-height: 1.2;
+            padding: 4px;
+        }
+
+        #float-ball.dragging {
+            opacity: 0.8;
+            cursor: grabbing;
+        }
+
+        #confirm-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 300;
+        }
+
+        .modal-content {
+            background: rgba(255,255,255,0.95);
+            border-radius: 16px;
+            padding: 30px 40px;
+            text-align: center;
+            min-width: 260px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+
+        .modal-text {
+            color: #333;
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 25px;
+        }
+
+        .modal-btns {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .modal-btn {
+            padding: 10px 30px;
+            border-radius: 8px;
+            border: none;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            height: 42px;
+            line-height: 1;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+
+        .btn-yes {
+            background: #ff4444;
+            color: #FFFFFF;
+        }
+
+        .btn-yes:hover {
+            background: #ff2222;
+        }
+
+        .btn-no {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .btn-no:hover {
+            background: #d0d0d0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="main-screen">
+        <div class="title">Sodium <span class="emoji-fire">🔥</span> MC 启动器 1.0</div>
+        <select class="version-select" id="versionSelect">
+            <option value="1.5.5" selected>1.5.5</option>
+            <option value="1.5">1.5</option>
+            <option value="1.4">1.4</option>
+            <option value="1.2">1.2</option>
+        </select>
+        <button class="launch-btn" id="launchBtn">启动</button>
+    </div>
+
+    <div id="loading-screen">
+        <div class="studio-name">🏀坤坤工作室</div>
+        <div class="loading-text" id="loadingText">检查依赖……</div>
+    </div>
+
+    <div id="game-container">
+        <iframe id="game-frame" sandbox="allow-scripts allow-same-origin allow-pointer-lock"></iframe>
+    </div>
+
+    <div id="float-ball">长按<br>退出</div>
+
+    <div id="confirm-modal">
+        <div class="modal-content">
+            <div class="modal-text">是否退出</div>
+            <div class="modal-btns">
+                <button class="modal-btn btn-yes" id="btnYes">是</button>
+                <button class="modal-btn btn-no" id="btnNo">否</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const versionSelect = document.getElementById('versionSelect');
+        const launchBtn = document.getElementById('launchBtn');
+        const mainScreen = document.getElementById('main-screen');
+        const loadingScreen = document.getElementById('loading-screen');
+        const loadingText = document.getElementById('loadingText');
+        const gameContainer = document.getElementById('game-container');
+        const gameFrame = document.getElementById('game-frame');
+        const floatBall = document.getElementById('float-ball');
+        const confirmModal = document.getElementById('confirm-modal');
+        const btnYes = document.getElementById('btnYes');
+        const btnNo = document.getElementById('btnNo');
+
+        const versionFiles = {
+            '1.5.5': 'Three1.5.5.html',
+            '1.5': 'Three1.5.html',
+            '1.4': 'Three1.4.html',
+            '1.2': 'Three1.2.html'
+        };
+
+        let isLaunching = false;
+
+        function resetToMain() {
+            gameFrame.src = '';
+            gameContainer.style.display = 'none';
+            floatBall.style.display = 'none';
+            loadingScreen.style.display = 'none';
+            loadingScreen.classList.remove('show');
+            mainScreen.style.display = 'flex';
+            isLaunching = false;
+        }
+
+        function handleLaunch(e) {
+            if (isLaunching) return;
+            isLaunching = true;
+            if (e && e.type === 'touchstart') e.preventDefault();
+
+            mainScreen.style.display = 'none';
+            loadingScreen.style.display = 'flex';
+            void loadingScreen.offsetWidth;
+            loadingScreen.classList.add('show');
+
+            const version = versionSelect.value;
+
+            setTimeout(() => {
+                loadingText.textContent = '检查依赖……（随后3s后开始正转）';
+                setTimeout(() => {
+                    loadingScreen.style.display = 'none';
+                    loadingScreen.classList.remove('show');
+
+                    const file = versionFiles[version];
+                    if (file) {
+                        gameFrame.src = file;
+                        gameContainer.style.display = 'block';
+                        floatBall.style.display = 'flex';
+                    }
+                }, 3000);
+            }, 50);
+        }
+
+        launchBtn.addEventListener('click', handleLaunch);
+        launchBtn.addEventListener('mousedown', handleLaunch);
+        launchBtn.addEventListener('touchstart', handleLaunch, { passive: false });
+
+        // 悬浮球拖动 + 长按/点击
+        let dragState = {
+            isDragging: false,
+            startX: 0, startY: 0,
+            ballLeft: 0, ballTop: 0,
+            startTime: 0,
+            hasMoved: false,
+            longPressTimer: null
+        };
+
+        const LONG_PRESS_TIME = 800;
+        const MOVE_THRESHOLD = 10;
+
+        function getClientPos(e) {
+            if (e.touches && e.touches.length > 0) {
+                return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+            return { x: e.clientX, y: e.clientY };
+        }
+
+        function onBallDown(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const pos = getClientPos(e);
+            const rect = floatBall.getBoundingClientRect();
+
+            dragState.isDragging = true;
+            dragState.hasMoved = false;
+            dragState.startX = pos.x;
+            dragState.startY = pos.y;
+            dragState.ballLeft = rect.left;
+            dragState.ballTop = rect.top;
+            dragState.startTime = Date.now();
+
+            floatBall.classList.add('dragging');
+
+            dragState.longPressTimer = setTimeout(() => {
+                if (dragState.isDragging && !dragState.hasMoved) {
+                    dragState.isDragging = false;
+                    floatBall.classList.remove('dragging');
+                    resetToMain();
+                }
+            }, LONG_PRESS_TIME);
+        }
+
+        function onBallMove(e) {
+            if (!dragState.isDragging) return;
+            const pos = getClientPos(e);
+            const dx = pos.x - dragState.startX;
+            const dy = pos.y - dragState.startY;
+
+            if (Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD) {
+                dragState.hasMoved = true;
+                if (dragState.longPressTimer) {
+                    clearTimeout(dragState.longPressTimer);
+                    dragState.longPressTimer = null;
+                }
+            }
+
+            floatBall.style.left = (dragState.ballLeft + dx) + 'px';
+            floatBall.style.top = (dragState.ballTop + dy) + 'px';
+            floatBall.style.transform = 'none';
+        }
+
+        function onBallUp(e) {
+            if (!dragState.isDragging) return;
+
+            if (dragState.longPressTimer) {
+                clearTimeout(dragState.longPressTimer);
+                dragState.longPressTimer = null;
+            }
+
+            const wasDragging = dragState.isDragging;
+            dragState.isDragging = false;
+            floatBall.classList.remove('dragging');
+
+            if (wasDragging && !dragState.hasMoved && (Date.now() - dragState.startTime < LONG_PRESS_TIME)) {
+                confirmModal.style.display = 'flex';
+            }
+        }
+
+        floatBall.addEventListener('mousedown', onBallDown);
+        floatBall.addEventListener('touchstart', onBallDown, { passive: false });
+
+        document.addEventListener('mousemove', onBallMove);
+        document.addEventListener('touchmove', onBallMove, { passive: false });
+
+        document.addEventListener('mouseup', onBallUp);
+        document.addEventListener('touchend', onBallUp);
+
+        // 弹窗按钮
+        function onYes(e) {
+            if (e && e.type === 'touchstart') e.preventDefault();
+            confirmModal.style.display = 'none';
+            resetToMain();
+        }
+
+        function onNo(e) {
+            if (e && e.type === 'touchstart') e.preventDefault();
+            confirmModal.style.display = 'none';
+        }
+
+        btnYes.addEventListener('click', onYes);
+        btnYes.addEventListener('mousedown', onYes);
+        btnYes.addEventListener('touchstart', onYes, { passive: false });
+
+        btnNo.addEventListener('click', onNo);
+        btnNo.addEventListener('mousedown', onNo);
+        btnNo.addEventListener('touchstart', onNo, { passive: false });
+    </script>
+</body>
+</html>

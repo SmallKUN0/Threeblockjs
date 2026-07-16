@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChunkRender 插件</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}
+iframe{width:100%;height:100%;border:none}
+#hint{position:fixed;top:12px;left:50%;transform:translateX(-50%);color:#0f0;background:rgba(0,0,0,.8);padding:6px 14px;font-family:monospace;font-size:13px;z-index:999;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="hint">正在注入合并渲染引擎...</div>
+<iframe id="G" src="Three1.5.5.html"></iframe>
+<script>
+const iframe=document.getElementById('G');
+iframe.onload=function(){
+const win=iframe.contentWindow,doc=win.document;
+const s=doc.createElement('script');
+s.textContent=`
+(function(){
+if(win._chunked)return;win._chunked=true;
+
+/* ---------- 面定义 ---------- */
+const FACES=[
+{dir:[1,0,0],verts:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]],t:'side',l:.78},
+{dir:[-1,0,0],verts:[[0,0,1],[0,1,1],[0,1,0],[0,0,0]],t:'side',l:.78},
+{dir:[0,1,0],verts:[[0,1,1],[1,1,1],[1,1,0],[0,1,0]],t:'top',l:1},
+{dir:[0,-1,0],verts:[[0,0,0],[1,0,0],[1,0,1],[0,0,1]],t:'bottom',l:.38},
+{dir:[0,0,1],verts:[[0,0,1],[1,0,1],[1,1,1],[0,1,1]],t:'side',l:.68},
+{dir:[0,0,-1],verts:[[1,0,0],[0,0,0],[0,1,0],[1,1,0]],t:'side',l:.68}
+];
+const NONSOLID=['sapling','short_grass','tall_grass_bottom','tall_grass_top','poppy','dandelion','blue_orchid','allium','azure_bluet','red_tulip','orange_tulip','white_tulip','pink_tulip','oxeye_daisy','cornflower','lily_of_the_valley','redstone_dust','lever','redstone_torch','repeater'];
+function isSolidB(x,y,z){const t=getBlockType(x,y,z);return t&&!NONSOLID.includes(t);}
+
+const BC={
+grass:{top:0x5ba836,side:0x5a7c3a,bottom:0x8B4513},
+dirt:{all:0x8B4513},stone:{all:0x808080},bedrock:{all:0x404040},
+wood:{all:0x5a3a1a},leaves:{all:0x228B22},plank:{all:0xC19A6B},
+redstone_lamp:{all:0xFFAA00},coal_ore:{all:0x333333},
+diamond_ore:{all:0x00FFFF},redstone_ore:{all:0xFF0000},
+gold_ore:{all:0xFFD700},emerald_ore:{all:0x50C878},
+iron_ore:{all:0xB87333},tnt:{all:0xFF0000}
+};
+const MATS={};
+for(const k in BC)MATS[k]=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.9});
+
+const CMesh={},dirty=new Set();
+function fc(t,ft){const c=BC[t];return c?(c.all!=null?c.all:c[ft]||0xFFFFFF):0xFFFFFF;}
+function h3(x,y,z,f){let h=(x*374761393+y*668265263+z*1274126177+f*7919)|0;h=((h^(h>>>13))*1274126177)|0;h=(h^(h>>>16))>>>0;return h/0xFFFFFFFF;}
+function addF(D,lx,wy,lz,fi,tp,wx,wy2,wz){
+const f=FACES[fi];const bc=new THREE.Color(fc(tp,f.t));const n=h3(wx,wy2,wz,fi);
+for(let i=0;i<4;i++){const v=f.verts[i];const col=bc.clone();col.multiplyScalar(f.l*(0.94+n*0.06));D.p.push(lx+v[0],wy+v[1],lz+v[2]);D.n.push(...f.dir);D.c.push(col.r,col.g,col.b);}
+const s=D.p.length/3-4;D.i.push(s,s+1,s+2,s,s+2,s+3);
+}
+function buildChunk(cx,cz){
+const ck=cx+','+cz;
+if(CMesh[ck]){for(const t in CMesh[ck]){scene.remove(CMesh[ck][t]);CMesh[ck][t].geometry.dispose();}delete CMesh[ck];}
+const D={};for(const k in BC)D[k]={p:[],n:[],c:[],i:[]};
+const bx=cx*CONFIG.chunkSize,bz=cz*CONFIG.chunkSize;
+const keys=chunkBlocks[ck]||[];
+keys.forEach(key=>{
+if(destroyedBlocks.has(key))return;
+const[x,y,z]=key.split(',').map(Number);const tp=getBlockType(x,y,z);
+if(!tp||!D[tp]||NONSOLID.includes(tp))return;
+const lx=x-bx,lz=z-bz;
+for(let fi=0;fi<6;fi++){const f=FACES[fi];if(!isSolidB(x+f.dir[0],y+f.dir[1],z+f.dir[2]))addF(D[tp],lx,y,lz,fi,tp,x,y,z);}
+});
+for(const k in D){const d=D[k];if(!d.p.length)continue;const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(d.p,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(d.n,3));g.setAttribute('color',new THREE.Float32BufferAttribute(d.c,3));g.setIndex(d.i);const m=new THREE.Mesh(g,MATS[k]);m.position.set(bx,0,bz);m.userData={isChunk:true,cx,cz};scene.add(m);if(!CMesh[ck])CMesh[ck]={};CMesh[ck][k]=m;}
+}
+
+/* ---------- 覆盖核心函数 ---------- */
+const oldAct=activateChunk;
+activateChunk=function(cx,cz){
+const ck=cx+','+cz;if(!chunkBlocks[ck])return;
+chunkBlocks[ck].forEach(key=>{if(!destroyedBlocks.has(key))activeBlocks.add(key);});
+dirty.add(ck);
+(chunkBlocks[ck]||[]).forEach(key=>{
+if(destroyedBlocks.has(key))return;
+const[x,y,z]=key.split(',').map(Number);const t=getBlockType(x,y,z);
+if(t&&NONSOLID.includes(t)&&!blockMeshes[key]&&isExposed(x,y,z))createBlockMesh(x,y,z,t);
+});
+};
+deactivateChunk=function(ck){
+pendingMeshes=pendingMeshes.filter(it=>getChunkKey(it.x,it.z)!==ck);
+chunkBlocks[ck]?.forEach(key=>{if(placedBlocks[key])return;activeBlocks.delete(key);});
+if(CMesh[ck]){for(const t in CMesh[ck]){scene.remove(CMesh[ck][t]);CMesh[ck][t].geometry.dispose();}delete CMesh[ck];}
+(chunkBlocks[ck]||[]).forEach(key=>{if(blockMeshes[key]){const m=blockMeshes[key];scene.remove(m);delete blockMeshes[key];const i=blockMeshesArray.indexOf(m);if(i>-1)blockMeshesArray.splice(i,1);}});
+};
+processPendingMeshes=function(){
+let c=0;const arr=Array.from(dirty);
+arr.sort((a,b)=>{const[ax,az]=a.split(',').map(Number);const[bx,bz]=b.split(',').map(Number);const da=(ax*CONFIG.chunkSize-player.x)**2+(az*CONFIG.chunkSize-player.z)**2;const db=(bx*CONFIG.chunkSize-player.x)**2+(bz*CONFIG.chunkSize-player.z)**2;return da-db;});
+for(const ck of arr){if(c>=2)break;const[cx,cz]=ck.split(',').map(Number);buildChunk(cx,cz);dirty.delete(ck);c++;}
+};
+
+/* ---------- 射线检测兼容合并 Mesh ---------- */
+updateTargetBlock=function(){
+if(!isGameRunning){targetBlock=null;return;}
+const raycaster=new THREE.Raycaster();raycaster.setFromCamera(new THREE.Vector2(0,0),camera);
+const all=blockMeshesArray.concat(Object.values(CMesh).flatMap(o=>Object.values(o)));
+const hits=raycaster.intersectObjects(all,true);
+if(hits.length&&hits[0].distance<=CONFIG.reach){
+const h=hits[0];let x,y,z,type;
+if(h.object.userData.isChunk){
+const t=h.distance-0.001,o=camera.position,dir=new THREE.Vector3();camera.getWorldDirection(dir);
+const px=o.x+dir.x*t,py=o.y+dir.y*t,pz=o.z+dir.z*t;
+x=Math.floor(px);y=Math.floor(py);z=Math.floor(pz);type=getBlockType(x,y,z);
+}else{
+let m=h.object;if(m.parent&&(m.parent.type==='Group'||m.parent.type==='Object3D')&&m.parent.userData.type)m=m.parent;
+x=m.userData.x;y=m.userData.y;z=m.userData.z;type=m.userData.type;
+}
+if(type)targetBlock={x,y,z,type,key:x+','+y+','+z};else targetBlock=null;
+}else targetBlock=null;
+};
+
+/* ---------- 破坏 & 放置 ---------- */
+breakBlock=function(){
+gravityEnabled=true;if(!targetBlock)return;
+const{x,y,z,type,key}=targetBlock;if(type==='bedrock')return;
+spawnBreakParticles(x,y,z,type);
+if(blockMeshes[key]){const m=blockMeshes[key];scene.remove(m);delete blockMeshes[key];const i=blockMeshesArray.indexOf(m);if(i>-1)blockMeshesArray.splice(i,1);}
+destroyedBlocks.add(key);delete worldBlocks[key];delete placedBlocks[key];activeBlocks.delete(key);
+delete redstoneData[key];delete leverStates[key];delete stoneOres[key];delete tntTimers[key];
+if(type==='leaves'){naturalLeaves.delete(key);delete leavesDecayTimers[key];}
+if(type==='sapling')delete saplingTimers[key];
+if(type==='wood')checkLeavesDecay(true);
+if(isRedstoneComponent(type))updateRedstone();
+incrementBlockAction();targetBlock=null;
+const cx=Math.floor(x/CONFIG.chunkSize),cz=Math.floor(z/CONFIG.chunkSize);
+[[0,0],[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dz])=>dirty.add((cx+dx)+','+(cz+dz)));
+};
+
+placeBlock=function(){
+gravityEnabled=true;
+const raycaster=new THREE.Raycaster();raycaster.setFromCamera(new THREE.Vector2(0,0),camera);
+const all=blockMeshesArray.concat(Object.values(CMesh).flatMap(o=>Object.values(o)));
+const hits=raycaster.intersectObjects(all,true);
+if(!hits.length||hits[0].distance>CONFIG.reach)return;
+const h=hits[0];let nx,ny,nz;
+if(h.object.userData.isChunk){const p=h.point,n=h.face.normal;nx=Math.floor(p.x+n.x*0.5);ny=Math.floor(p.y+n.y*0.5);nz=Math.floor(p.z+n.z*0.5);}
+else{let m=h.object;if(m.parent&&m.parent.userData.type)m=m.parent;nx=m.userData.x+Math.round(h.face.normal.x);ny=m.userData.y+Math.round(h.face.normal.y);nz=m.userData.z+Math.round(h.face.normal.z);}
+const pKey=nx+','+ny+','+nz;if(getBlockType(nx,ny,nz)!==null||blockMeshes[pKey])return;
+if(selectedType==='sapling'){const b=getBlockType(nx,ny-1,nz);if(b!=='grass'&&b!=='dirt')return;}
+placedBlocks[pKey]=selectedType;worldBlocks[pKey]=selectedType;
+const ck=getChunkKey(nx,nz);if(!chunkBlocks[ck])chunkBlocks[ck]=new Set();chunkBlocks[ck].add(pKey);activeBlocks.add(pKey);
+if(NONSOLID.includes(selectedType))createBlockMesh(nx,ny,nz,selectedType);
+if(selectedType==='repeater')redstoneData[pKey]={signal:0,direction:Math.floor(Math.random()*4)};else redstoneData[pKey]={signal:0};
+if(selectedType==='sapling')saplingTimers[pKey]=10+Math.random()*40;
+if(isRedstoneComponent(selectedType))updateRedstone();
+incrementBlockAction();
+const cx=Math.floor(nx/CONFIG.chunkSize),cz=Math.floor(nz/CONFIG.chunkSize);
+[[0,0],[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dz])=>dirty.add((cx+dx)+','+(cz+dz)));
+};
+
+/* ---------- 爆炸后重载兼容 ---------- */
+const oldReload=reloadBlocksAround;
+reloadBlocksAround=function(cx,cy,cz,r){
+const r2=r*r;
+for(let x=Math.floor(cx-r);x<=Math.ceil(cx+r);x++)for(let z=Math.floor(cz-r);z<=Math.ceil(cz+r);z++)if((x-cx)**2+(z-cz)**2<=r2)dirty.add(getChunkKey(x,z));
+oldReload(cx,cy,cz,r);
+};
+
+/* ---------- 清理旧 Mesh 并重建 ---------- */
+blockMeshesArray.forEach(m=>scene.remove(m));blockMeshesArray.length=0;
+for(const k in blockMeshes)delete blockMeshes[k];
+renderedChunks.forEach(ck=>dirty.add(ck));
+
+})();
+`;
+doc.body.appendChild(s);
+document.getElementById('hint').textContent='合并渲染引擎已注入';
+};
+</script>
+</body>
+</html>

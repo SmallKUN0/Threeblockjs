@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>3D方块世界 - Chunk渲染插件</title>
+<style>
+html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; background: #000; }
+#plugin-loading { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #8B4513; background-image: url('https://cdn.jsdmirror.com/gh/Faithful-Pack/Default-Java@1.21.11/assets/minecraft/textures/block/dirt.png'); background-repeat: repeat; background-size: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; z-index: 99999; font-family: 'Microsoft YaHei', sans-serif; }
+#plugin-loading-text { font-size: 1.5rem; margin-bottom: 20px; text-align: center; padding: 0 20px; }
+.plugin-progress-container { width: 300px; height: 30px; border: 2px solid white; }
+.plugin-progress-bar { width: 0%; height: 100%; background: #4CAF50; transition: width 0.2s; }
+</style>
+</head>
+<body>
+<div id="plugin-loading">
+  <div id="plugin-loading-text">正在加载游戏本体并应用Chunk渲染补丁...</div>
+  <div class="plugin-progress-container"><div class="plugin-progress-bar" id="plugin-progress"></div></div>
+</div>
+<script>
+function setProgress(pct) {
+    document.getElementById('plugin-progress').style.width = pct + '%';
+}
+
+function patchHTML(html) {
+    let h = html;
+    const failures = [];
+    
+    function replaceBetween(start, end, replacement) {
+        const i1 = h.indexOf(start);
+        const i2 = h.indexOf(end);
+        if (i1 === -1 || i2 === -1 || i1 >= i2) {
+            failures.push(start.trim().substring(0, 50));
+            return;
+        }
+        h = h.substring(0, i1) + replacement + h.substring(i2);
+    }
+    
+    function replaceMarker(marker, replacement) {
+        const idx = h.indexOf(marker);
+        if (idx === -1) {
+            failures.push(marker.trim().substring(0, 50));
+            return;
+        }
+        h = h.substring(0, idx) + replacement + h.substring(idx + marker.length);
+    }
+    
+    // Patch 1: pendingMeshes declaration
+    replaceMarker(
+        '        let pendingMeshes = [];\n        const MAX_MESHES_PER_FRAME = 20;',
+        '        let chunkRenderMeshes = {};\n        let dirtyChunks = new Set();\n        const MAX_CHUNKS_PER_FRAME = 2;\n        let lookedAtBlocks = new Set();'
+    );
+    setProgress(5);
+    
+    // Patch 2: activateChunk
+    replaceBetween(
+        '        function activateChunk(cx, cz) {',
+        '        function processPendingMeshes() {',
+        '        function activateChunk(cx, cz) {\n' +
+        '            const ck = `${cx},${cz}`;\n' +
+        '            if (!chunkBlocks[ck]) return;\n' +
+        '            chunkBlocks[ck].forEach(key => {\n' +
+        '                if (destroyedBlocks.has(key)) return;\n' +
+        '                activeBlocks.add(key);\n' +
+        '            });\n' +
+        '            dirtyChunks.add(ck);\n' +
+        '        }\n'
+    );
+    setProgress(15);
+    
+    // Patch 3: processPendingMeshes -> rebuildDirtyChunks
+    replaceBetween(
+        '        function processPendingMeshes() {',
+        '        function deactivateChunk(ck) {',
+        '        function processPendingMeshes() {\n' +
+        '            rebuildDirtyChunks();\n' +
+        '        }\n' +
+        '\n' +
+        '        function rebuildDirtyChunks() {\n' +
+        '            if (dirtyChunks.size === 0) return;\n' +
+        '            const chunksArr = [];\n' +
+        '            const pcx = Math.floor(player.x / CONFIG.chunkSize);\n' +
+        '            const pcz = Math.floor(player.z / CONFIG.chunkSize);\n' +
+        '            for (const ck of dirtyChunks) {\n' +
+        '                const [cx, cz] = ck.split(\',\').map(Number);\n' +
+        '                const dist = Math.sqrt((cx - pcx) ** 2 + (cz - pcz) ** 2);\n' +
+        '                chunksArr.push({ ck, dist });\n' +
+        '            }\n' +
+        '            chunksArr.sort((a, b) => a.dist - b.dist);\n' +
+        '            let rebuilt = 0;\n' +
+        '            for (const { ck } of chunksArr) {\n' +
+        '                if (rebuilt >= MAX_CHUNKS_PER_FRAME) break;\n' +
+        '                if (!dirtyChunks.has(ck)) continue;\n' +
+        '                dirtyChunks.delete(ck);\n' +
+        '                rebuildChunkMeshes(ck);\n' +
+        '                rebuilt++;\n' +
+        '            }\n' +
+        '        }\n' +
+        '\n' +
+        '        function rebuildChunkMeshes(ck) {\n' +
+        '            if (chunkBlocks[ck]) {\n' +
+        '                for (const key of chunkBlocks[ck]) {\n' +
+        '                    if (blockMeshes[key]) {\n' +
+        '                        const mesh = blockMeshes[key];\n' +
+        '                        scene.remove(mesh);\n' +
+        '                        const idx = blockMeshesArray.indexOf(mesh);\n' +
+        '                        if (idx > -1) blockMeshesArray.splice(idx, 1);\n' +
+        '                        delete blockMeshes[key];\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }\n' +
+        '            chunkRenderMeshes[ck] = [];\n' +
+        '            if (!chunkBlocks[ck]) return;\n' +
+        '            const isPartial = settings.chunkRenderMode === \'partial\';\n' +
+        '            let independentKeys = new Set();\n' +
+        '            if (isPartial) {\n' +
+        '                for (const key of chunkBlocks[ck]) {\n' +
+        '                    if (lookedAtBlocks.has(key)) independentKeys.add(key);\n' +
+        '                }\n' +
+        '            }\n' +
+        '            for (const key of chunkBlocks[ck]) {\n' +
+        '                if (destroyedBlocks.has(key)) continue;\n' +
+        '                const [x, y, z] = key.split(\',\').map(Number);\n' +
+        '                const type = getBlockType(x, y, z);\n' +
+        '                if (!type) continue;\n' +
+        '                if (isPartial && !independentKeys.has(key)) {\n' +
+        '                    const dx = x - player.x, dy = y - player.y, dz = z - player.z;\n' +
+        '                    if (Math.sqrt(dx*dx + dy*dy + dz*dz) > 5) continue;\n' +
+        '                    const mesh = createBlockMesh(x, y, z, type);\n' +
+        '                    if (mesh) {\n' +
+        '                        mesh.userData.isBatch = true;\n' +
+        '                        chunkRenderMeshes[ck].push(mesh);\n' +
+        '                    }\n' +
+        '                    continue;\n' +
+        '                }\n' +
+        '                if (isExposed(x, y, z)) {\n' +
+        '                    const mesh = createBlockMesh(x, y, z, type);\n' +
+        '                    if (mesh) chunkRenderMeshes[ck].push(mesh);\n' +
+        '                }\n' +
+        '            }\n' +
+        '        }\n'
+    );
+    setProgress(30);
+    
+    // Patch 4: deactivateChunk
+    replaceBetween(
+        '        function deactivateChunk(ck) {',
+        '        function updateChunks() {',
+        '        function deactivateChunk(ck) {\n' +
+        '            if (!chunkBlocks[ck]) return;\n' +
+        '            dirtyChunks.delete(ck);\n' +
+        '            if (chunkBlocks[ck]) {\n' +
+        '                for (const key of chunkBlocks[ck]) {\n' +
+        '                    if (blockMeshes[key]) {\n' +
+        '                        const mesh = blockMeshes[key];\n' +
+        '                        scene.remove(mesh);\n' +
+        '                        const idx = blockMeshesArray.indexOf(mesh);\n' +
+        '                        if (idx > -1) blockMeshesArray.splice(idx, 1);\n' +
+        '                        delete blockMeshes[key];\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }\n' +
+        '            if (chunkRenderMeshes[ck]) chunkRenderMeshes[ck] = [];\n' +
+        '            chunkBlocks[ck].forEach(key => {\n' +
+        '                if (placedBlocks[key]) return;\n' +
+        '                activeBlocks.delete(key);\n' +
+        '            });\n' +
+        '        }\n'
+    );
+    setProgress(40);
+    
+    // Patch 5: updateTargetBlock
+    replaceBetween(
+        '        function updateTargetBlock() {',
+        '        function spawnBreakParticles',
+        '        function updateTargetBlock() {\n' +
+        '            if (!isGameRunning) { targetBlock = null; return; }\n' +
+        '            const raycaster = new THREE.Raycaster();\n' +
+        '            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);\n' +
+        '            const intersects = raycaster.intersectObjects(blockMeshesArray, true);\n' +
+        '            if (intersects.length > 0 && intersects[0].distance <= CONFIG.reach) {\n' +
+        '                const mesh = intersects[0].object;\n' +
+        '                let targetMesh = mesh;\n' +
+        '                if (mesh.parent && (mesh.parent.type === \'Group\' || mesh.parent.type === \'Object3D\')) {\n' +
+        '                    if (mesh.parent.userData && mesh.parent.userData.type) {\n' +
+        '                        targetMesh = mesh.parent;\n' +
+        '                    }\n' +
+        '                }\n' +
+        '                targetBlock = targetMesh.userData;\n' +
+        '                if (targetBlock && targetBlock.key) {\n' +
+        '                    if (!lookedAtBlocks.has(targetBlock.key)) {\n' +
+        '                        lookedAtBlocks.add(targetBlock.key);\n' +
+        '                        dirtyChunks.add(getChunkKey(targetBlock.x, targetBlock.z));\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            } else {\n' +
+        '                targetBlock = null;\n' +
+        '            }\n' +
+        '        }\n'
+    );
+    setProgress(50);
+    
+    // Patch 6: breakBlock dirty marking
+    replaceMarker(
+        '            const dirs = [\n' +
+        '                [1, 0, 0],\n' +
+        '                [-1, 0, 0],\n' +
+        '                [0, 1, 0],\n' +
+        '                [0, -1, 0],\n' +
+        '                [0, 0, 1],\n' +
+        '                [0, 0, -1]\n' +
+        '            ];\n' +
+        '            for (const [dx, dy, dz] of dirs) {\n' +
+        '                const nx = x + dx,\n' +
+        '                    ny = y + dy,\n' +
+        '                    nz = z + dz;\n' +
+        '                const nKey = `${nx},${ny},${nz}`;\n' +
+        '                if (worldBlocks[nKey] && !blockMeshes[nKey] && isExposed(nx, ny, nz)) {\n' +
+        '                    createBlockMesh(nx, ny, nz, worldBlocks[nKey]);\n' +
+        '                }\n' +
+        '            }\n' +
+        '        }',
+        '            const affectedChunks = new Set();\n' +
+        '            affectedChunks.add(getChunkKey(x, z));\n' +
+        '            const dirs = [\n' +
+        '                [1, 0, 0],\n' +
+        '                [-1, 0, 0],\n' +
+        '                [0, 1, 0],\n' +
+        '                [0, -1, 0],\n' +
+        '                [0, 0, 1],\n' +
+        '                [0, 0, -1]\n' +
+        '            ];\n' +
+        '            for (const [dx, dy, dz] of dirs) {\n' +
+        '                const nx = x + dx,\n' +
+        '                    ny = y + dy,\n' +
+        '                    nz = z + dz;\n' +
+        '                const nKey = `${nx},${ny},${nz}`;\n' +
+        '                affectedChunks.add(getChunkKey(nx, nz));\n' +
+        '                if (worldBlocks[nKey] && !blockMeshes[nKey] && isExposed(nx, ny, nz)) {\n' +
+        '                    createBlockMesh(nx, ny, nz, worldBlocks[nKey]);\n' +
+        '                }\n' +
+        '            }\n' +
+        '            for (const ack of affectedChunks) dirtyChunks.add(ack);\n' +
+        '        }'
+    );
+    setProgress(60);
+    
+    // Patch 7: placeBlock dirty marking
+    replaceMarker(
+        '                incrementBlockAction();\n\n                const playerMinX = Math.floor(player.x - 0.3);',
+        '                incrementBlockAction();\n                dirtyChunks.add(getChunkKey(nx, nz));\n\n                const playerMinX = Math.floor(player.x - 0.3);'
+    );
+    setProgress(65);
+    
+    // Patch 8: explodeTNT dirty marking
+    replaceMarker(
+        '            for (const item of tntToIgnite) {\n' +
+        '                tntTimers[item.key] = { elapsed: 0, flashCount: 0, active: true };\n' +
+        '                const mesh = blockMeshes[item.key];\n' +
+        '                if (mesh && Array.isArray(mesh.material)) {\n' +
+        '                    mesh.material.forEach(m => {\n' +
+        '                        m.emissive.setHex(0x000000);\n' +
+        '                        m.emissiveIntensity = 0;\n' +
+        '                    });\n' +
+        '                }\n' +
+        '            }\n\n            updateRedstone();\n        }',
+        '            for (const item of tntToIgnite) {\n' +
+        '                tntTimers[item.key] = { elapsed: 0, flashCount: 0, active: true };\n' +
+        '                const mesh = blockMeshes[item.key];\n' +
+        '                if (mesh && Array.isArray(mesh.material)) {\n' +
+        '                    mesh.material.forEach(m => {\n' +
+        '                        m.emissive.setHex(0x000000);\n' +
+        '                        m.emissiveIntensity = 0;\n' +
+        '                    });\n' +
+        '                }\n' +
+        '            }\n\n' +
+        '            const affectedChunksTNT = new Set();\n' +
+        '            for (let x = Math.floor(cx - 4); x <= Math.ceil(cx + 4); x++) {\n' +
+        '                for (let z = Math.floor(cz - 4); z <= Math.ceil(cz + 4); z++) {\n' +
+        '                    affectedChunksTNT.add(getChunkKey(x, z));\n' +
+        '                }\n' +
+        '            }\n' +
+        '            for (const ack of affectedChunksTNT) dirtyChunks.add(ack);\n\n' +
+        '            updateRedstone();\n        }'
+    );
+    setProgress(70);
+    
+    // Patch 9: growSapling dirty marking
+    replaceMarker(
+        '            const r2 = 4 * 4;\n' +
+        '            for (const k of addedKeys) {\n' +
+        '                const [bx, by, bz] = k.split(\',\').map(Number);\n' +
+        '                const dx = bx - x,\n' +
+        '                    dy = by - y,\n' +
+        '                    dz = bz - z;\n' +
+        '                if (dx * dx + dy * dy + dz * dz > r2 || dy < 0) {\n' +
+        '                    if (!blockMeshes[k] && isExposed(bx, by, bz)) {\n' +
+        '                        createBlockMesh(bx, by, bz, worldBlocks[k]);\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }\n' +
+        '        }',
+        '            const r2 = 4 * 4;\n' +
+        '            const affectedChunksSapling = new Set();\n' +
+        '            affectedChunksSapling.add(getChunkKey(x, z));\n' +
+        '            for (const k of addedKeys) {\n' +
+        '                const [bx, by, bz] = k.split(\',\').map(Number);\n' +
+        '                const dx = bx - x,\n' +
+        '                    dy = by - y,\n' +
+        '                    dz = bz - z;\n' +
+        '                if (dx * dx + dy * dy + dz * dz > r2 || dy < 0) {\n' +
+        '                    if (!blockMeshes[k] && isExposed(bx, by, bz)) {\n' +
+        '                        createBlockMesh(bx, by, bz, worldBlocks[k]);\n' +
+        '                    }\n' +
+        '                }\n' +
+        '                affectedChunksSapling.add(getChunkKey(bx, bz));\n' +
+        '            }\n' +
+        '            for (const ack of affectedChunksSapling) dirtyChunks.add(ack);\n' +
+        '        }'
+    );
+    setProgress(75);
+    
+    // Patch 10: decayLeaf dirty marking
+    replaceMarker(
+        '            const checkDirs = [\n' +
+        '                [1, 0, 0],\n' +
+        '                [-1, 0, 0],\n' +
+        '                [0, 1, 0],\n' +
+        '                [0, -1, 0],\n' +
+        '                [0, 0, 1],\n' +
+        '                [0, 0, -1]\n' +
+        '            ];\n' +
+        '            const checked = new Set();\n' +
+        '            for (const item of toRemove) {\n' +
+        '                for (const [dx, dy, dz] of checkDirs) {\n' +
+        '                    const nx = item.x + dx,\n' +
+        '                        ny = item.y + dy,\n' +
+        '                        nz = item.z + dz;\n' +
+        '                    const nKey = `${nx},${ny},${nz}`;\n' +
+        '                    if (checked.has(nKey)) continue;\n' +
+        '                    checked.add(nKey);\n' +
+        '                    if (worldBlocks[nKey] && !blockMeshes[nKey] && isExposed(nx, ny, nz)) {\n' +
+        '                        createBlockMesh(nx, ny, nz, worldBlocks[nKey]);\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }\n' +
+        '        }',
+        '            const checkDirs = [\n' +
+        '                [1, 0, 0],\n' +
+        '                [-1, 0, 0],\n' +
+        '                [0, 1, 0],\n' +
+        '                [0, -1, 0],\n' +
+        '                [0, 0, 1],\n' +
+        '                [0, 0, -1]\n' +
+        '            ];\n' +
+        '            const checked = new Set();\n' +
+        '            const affectedChunksLeaf = new Set();\n' +
+        '            affectedChunksLeaf.add(getChunkKey(x, z));\n' +
+        '            for (const item of toRemove) {\n' +
+        '                for (const [dx, dy, dz] of checkDirs) {\n' +
+        '                    const nx = item.x + dx,\n' +
+        '                        ny = item.y + dy,\n' +
+        '                        nz = item.z + dz;\n' +
+        '                    const nKey = `${nx},${ny},${nz}`;\n' +
+        '                    affectedChunksLeaf.add(getChunkKey(nx, nz));\n' +
+        '                    if (checked.has(nKey)) continue;\n' +
+        '                    checked.add(nKey);\n' +
+        '                    if (worldBlocks[nKey] && !blockMeshes[nKey] && isExposed(nx, ny, nz)) {\n' +
+        '                        createBlockMesh(nx, ny, nz, worldBlocks[nKey]);\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }\n' +
+        '            for (const ack of affectedChunksLeaf) dirtyChunks.add(ack);\n' +
+        '        }'
+    );
+    setProgress(80);
+    
+    // Patch 11: enterGame init
+    replaceMarker(
+        '                    for (let cx = -1; cx <= 1; cx++) {\n' +
+        '                        for (let cz = -1; cz <= 1; cz++) {\n' +
+        '                            activateChunk(cx, cz);\n' +
+        '                            renderedChunks.add(`${cx},${cz}`);\n' +
+        '                        }\n' +
+        '                    }',
+        '                    chunkRenderMeshes = {};\n' +
+        '                    dirtyChunks = new Set();\n' +
+        '                    lookedAtBlocks = new Set();\n' +
+        '                    for (let cx = -1; cx <= 1; cx++) {\n' +
+        '                        for (let cz = -1; cz <= 1; cz++) {\n' +
+        '                            activateChunk(cx, cz);\n' +
+        '                            renderedChunks.add(`${cx},${cz}`);\n' +
+        '                        }\n' +
+        '                    }'
+    );
+    setProgress(85);
+    
+    // Patch 12: returnToMainMenu cleanup
+    replaceMarker(
+        '                    pendingMeshes = [];\n' +
+        '                    particles.forEach(p => scene.remove(p));\n' +
+        '                    particles = [];',
+        '                    chunkRenderMeshes = {};\n' +
+        '                    dirtyChunks = new Set();\n' +
+        '                    lookedAtBlocks = new Set();\n' +
+        '                    particles.forEach(p => scene.remove(p));\n' +
+        '                    particles = [];'
+    );
+    setProgress(90);
+    
+    // Patch 13: generateInitialWorld cleanup
+    replaceMarker(
+        '            pendingMeshes = [];',
+        '            chunkRenderMeshes = {};\n' +
+        '            dirtyChunks = new Set();\n' +
+        '            lookedAtBlocks = new Set();'
+    );
+    setProgress(92);
+    
+    // Patch 14: generateInitialWorld mesh tracking
+    replaceMarker(
+        '            for (let cx = -2; cx <= 2; cx++) {\n' +
+        '                for (let cz = -2; cz <= 2; cz++) {\n' +
+        '                    const ck = `${cx},${cz}`;\n' +
+        '                    if (chunkBlocks[ck]) {\n' +
+        '                        chunkBlocks[ck].forEach(key => {\n' +
+        '                            if (destroyedBlocks.has(key)) return;\n' +
+        '                            activeBlocks.add(key);\n' +
+        '                            const [x, y, z] = key.split(\',\').map(Number);\n' +
+        '                            if (isExposed(x, y, z)) {\n' +
+        '                                const type = getBlockType(x, y, z);\n' +
+        '                                if (type) createBlockMesh(x, y, z, type);\n' +
+        '                            }\n' +
+        '                        });\n' +
+        '                        renderedChunks.add(ck);\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }',
+        '            for (let cx = -2; cx <= 2; cx++) {\n' +
+        '                for (let cz = -2; cz <= 2; cz++) {\n' +
+        '                    const ck = `${cx},${cz}`;\n' +
+        '                    if (chunkBlocks[ck]) {\n' +
+        '                        if (!chunkRenderMeshes[ck]) chunkRenderMeshes[ck] = [];\n' +
+        '                        chunkBlocks[ck].forEach(key => {\n' +
+        '                            if (destroyedBlocks.has(key)) return;\n' +
+        '                            activeBlocks.add(key);\n' +
+        '                            const [x, y, z] = key.split(\',\').map(Number);\n' +
+        '                            if (isExposed(x, y, z)) {\n' +
+        '                                const type = getBlockType(x, y, z);\n' +
+        '                                if (type) {\n' +
+        '                                    const mesh = createBlockMesh(x, y, z, type);\n' +
+        '                                    if (mesh) chunkRenderMeshes[ck].push(mesh);\n' +
+        '                                }\n' +
+        '                            }\n' +
+        '                        });\n' +
+        '                        renderedChunks.add(ck);\n' +
+        '                    }\n' +
+        '                }\n' +
+        '            }'
+    );
+    setProgress(95);
+    
+    // Patch 15: enterGame mesh tracking
+    replaceMarker(
+        '                    for (let x = -2; x <= 2; x++) {\n' +
+        '                        for (let z = -2; z <= 2; z++) {\n' +
+        '                            const h = getSurfaceHeight(x, z);\n' +
+        '                            for (let y = h; y >= CONFIG.worldBottom; y--) {\n' +
+        '                                if (isExposed(x, y, z)) {\n' +
+        '                                    const type = getBlockType(x, y, z);\n' +
+        '                                    if (type) createBlockMesh(x, y, z, type);\n' +
+        '                                }\n' +
+        '                            }\n' +
+        '                        }\n' +
+        '                    }',
+        '                    for (let x = -2; x <= 2; x++) {\n' +
+        '                        for (let z = -2; z <= 2; z++) {\n' +
+        '                            const h = getSurfaceHeight(x, z);\n' +
+        '                            const ck = getChunkKey(x, z);\n' +
+        '                            if (!chunkRenderMeshes[ck]) chunkRenderMeshes[ck] = [];\n' +
+        '                            for (let y = h; y >= CONFIG.worldBottom; y--) {\n' +
+        '                                if (isExposed(x, y, z)) {\n' +
+        '                                    const type = getBlockType(x, y, z);\n' +
+        '                                    if (type) {\n' +
+        '                                        const mesh = createBlockMesh(x, y, z, type);\n' +
+        '                                        if (mesh) chunkRenderMeshes[ck].push(mesh);\n' +
+        '                                    }\n' +
+        '                                }\n' +
+        '                            }\n' +
+        '                        }\n' +
+        '                    }'
+    );
+    setProgress(100);
+    
+    if (failures.length > 0) {
+        console.error('Patch failures:', failures);
+        document.getElementById('plugin-loading-text').innerHTML += 
+            '<div style="color:#ffaa00; font-size:0.9rem; margin-top:10px;">警告: ' + failures.length + ' 个补丁未匹配</div>';
+    }
+    return h;
+}
+
+fetch('Three1.5.5.html')
+  .then(r => {
+      if (!r.ok) throw new Error('无法加载 Three1.5.5.html (HTTP ' + r.status + ')');
+      return r.text();
+  })
+  .then(html => {
+      const patched = patchHTML(html);
+      if (document.getElementById('plugin-loading')) {
+          document.getElementById('plugin-loading').style.display = 'none';
+      }
+      document.open();
+      document.write(patched);
+      document.close();
+  })
+  .catch(err => {
+      document.getElementById('plugin-loading-text').innerHTML = 
+          '<div style="color:#ff4444; font-size:1.2rem; margin-bottom:10px;">加载失败</div>' +
+          '<div style="font-size:1rem;">' + err.message + '</div>' +
+          '<div style="font-size:0.9rem; margin-top:15px; color:#ccc;">请确保 Three1.5.5.html 与本文件在同一目录下</div>';
+      document.getElementById('plugin-progress').style.background = '#f44336';
+  });
+</script>
+</body>
+</html>

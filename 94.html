@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>小坤坤  3D 世界探索</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+        #canvas-container { width: 100%; height: 100%; position: fixed; top: 0; left: 0; z-index: 1; }
+        canvas { display: block; }
+        #ui-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        #ui-layer > * { pointer-events: auto; }
+        #joystick-zone { position: absolute; bottom: 80px; left: 80px; width: 160px; height: 160px; border-radius: 50%; background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; }
+        #joystick-knob { width: 60px; height: 60px; border-radius: 50%; background: rgba(255,255,255,0.35); border: 2px solid rgba(255,255,255,0.5); position: absolute; transition: none; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+        #sprint-btn { position: absolute; bottom: 110px; right: 60px; width: 90px; height: 90px; border-radius: 50%; background: rgba(255,200,50,0.2); border: 2px solid rgba(255,200,50,0.5); color: rgba(255,200,50,0.9); font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; cursor: pointer; pointer-events: auto; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+        #sprint-btn.active { background: rgba(255,200,50,0.5); transform: scale(0.95); }
+        #crouch-btn { position: absolute; bottom: 10px; right: 60px; width: 90px; height: 70px; border-radius: 12px; background: rgba(150,150,150,0.2); border: 2px solid rgba(150,150,150,0.5); color: rgba(200,200,200,0.9); font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; cursor: pointer; pointer-events: auto; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+        #crouch-btn.active { background: rgba(100,100,100,0.5); transform: scale(0.95); }
+        #interact-btn { position: absolute; bottom: 220px; right: 60px; width: 90px; height: 60px; border-radius: 12px; background: rgba(100,200,255,0.2); border: 2px solid rgba(100,200,255,0.5); color: rgba(100,200,255,0.9); font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; cursor: pointer; pointer-events: auto; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+        #interact-btn:active { background: rgba(100,200,255,0.4); transform: scale(0.95); }
+        #crosshair { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 20px; height: 20px; pointer-events: none; z-index: 100; }
+        .ch-line { position: absolute; background: rgba(255,255,255,0.85); box-shadow: 0 0 2px rgba(0,0,0,0.5); }
+        .ch-line.h { width: 20px; height: 2px; top: 9px; left: 0; }
+        .ch-line.v { width: 2px; height: 20px; top: 0; left: 9px; }
+        .ch-dot { position: absolute; width: 3px; height: 3px; background: rgba(255,255,255,0.95); border-radius: 50%; top: 8.5px; left: 8.5px; }
+        #hint { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.6); font-size: 12px; font-family: sans-serif; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+        #death-screen { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 1000; flex-direction: column; align-items: center; justify-content: center; }
+        #death-text { color: #ff0000; font-size: 28px; text-align: center; font-family: sans-serif; font-weight: bold; line-height: 1.8; }
+        @media (min-width: 1024px) { #joystick-zone { opacity: 0.5; } }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="ui-layer">
+        <div id="hint">WASD移动 | Shift奔跑 | Ctrl蹲下 | F互动 | 拖拽转视角</div>
+        <div id="crosshair"><div class="ch-line h"></div><div class="ch-line v"></div><div class="ch-dot"></div></div>
+        <div id="joystick-zone"><div id="joystick-knob"></div></div>
+        <div id="interact-btn">互动 F</div>
+        <div id="sprint-btn">奔跑</div>
+        <div id="crouch-btn">蹲下</div>
+    </div>
+    <div id="death-screen"><div id="death-text">你被追上了<br>三秒后重置本文件</div></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        const CONFIG = {
+            chunkSize: 25, renderRadius: 2, moveSpeed: 8, sprintMultiplier: 2.0,
+            playerHeight: 1.7, playerRadius: 0.3, grassDensity: 800,
+            grassHeightMin: 0.07, grassHeightMax: 0.34, fov: 75,
+            dayDuration: 180, nightDuration: 90, transitionTime: 5,
+        };
+
+        class SimplexNoise {
+            constructor(seed = Math.random()) {
+                this.p = new Uint8Array(256);
+                for (let i = 0; i < 256; i++) this.p[i] = i;
+                let s = seed * 12345;
+                for (let i = 255; i > 0; i--) {
+                    s = (s * 16807 + 0) % 2147483647;
+                    const j = s % (i + 1);
+                    [this.p[i], this.p[j]] = [this.p[j], this.p[i]];
+                }
+                this.perm = new Uint8Array(512);
+                this.permMod12 = new Uint8Array(512);
+                for (let i = 0; i < 512; i++) {
+                    this.perm[i] = this.p[i & 255];
+                    this.permMod12[i] = this.perm[i] % 12;
+                }
+                this.grad3 = [
+                    [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],
+                    [1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+                    [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]
+                ];
+            }
+            dot(g, x, y) { return g[0]*x + g[1]*y; }
+            noise2D(xin, yin) {
+                const F2 = 0.5 * (Math.sqrt(3.0) - 1.0);
+                const G2 = (3.0 - Math.sqrt(3.0)) / 6.0;
+                let n0, n1, n2;
+                let s = (xin + yin) * F2;
+                let i = Math.floor(xin + s);
+                let j = Math.floor(yin + s);
+                let t = (i + j) * G2;
+                let X0 = i - t, Y0 = j - t;
+                let x0 = xin - X0, y0 = yin - Y0;
+                let i1, j1;
+                if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+                let x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+                let x2 = x0 - 1.0 + 2.0 * G2, y2 = y0 - 1.0 + 2.0 * G2;
+                let ii = i & 255, jj = j & 255;
+                let gi0 = this.permMod12[ii + this.perm[jj]];
+                let gi1 = this.permMod12[ii + i1 + this.perm[jj + j1]];
+                let gi2 = this.permMod12[ii + 1 + this.perm[jj + 1]];
+                let t0 = 0.5 - x0*x0 - y0*y0;
+                if (t0 < 0) n0 = 0.0;
+                else { t0 *= t0; n0 = t0 * t0 * this.dot(this.grad3[gi0], x0, y0); }
+                let t1 = 0.5 - x1*x1 - y1*y1;
+                if (t1 < 0) n1 = 0.0;
+                else { t1 *= t1; n1 = t1 * t1 * this.dot(this.grad3[gi1], x1, y1); }
+                let t2 = 0.5 - x2*x2 - y2*y2;
+                if (t2 < 0) n2 = 0.0;
+                else { t2 *= t2; n2 = t2 * t2 * this.dot(this.grad3[gi2], x2, y2); }
+                return 70.0 * (n0 + n1 + n2);
+            }
+        }
+
+        const noise = new SimplexNoise(42);
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 30, 90);
+
+        const camera = new THREE.PerspectiveCamera(CONFIG.fov, window.innerWidth / window.innerHeight, 0.1, 300);
+        camera.position.set(0, CONFIG.playerHeight, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(50, 80, 30);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.left = -60;
+        dirLight.shadow.camera.right = 60;
+        dirLight.shadow.camera.top = 60;
+        dirLight.shadow.camera.bottom = -60;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        const textureLoader = new THREE.TextureLoader();
+        const wallTexture = textureLoader.load('Wall.png');
+        wallTexture.colorSpace = THREE.SRGBColorSpace;
+        const houseTopTexture = textureLoader.load('HouseTop.png');
+        houseTopTexture.colorSpace = THREE.SRGBColorSpace;
+        const doorTexture = textureLoader.load('Door.png');
+        doorTexture.colorSpace = THREE.SRGBColorSpace;
+        const monsterTexture = textureLoader.load('Monster.png');
+        monsterTexture.colorSpace = THREE.SRGBColorSpace;
+        const cloudTexture = textureLoader.load('Cloud.png');
+        cloudTexture.colorSpace = THREE.SRGBColorSpace;
+
+        // ==================== 天空（圆形穹顶，不扭曲） ====================
+        const skyGeo = new THREE.SphereGeometry(150, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.55);
+        const skyMat = new THREE.MeshBasicMaterial({
+            map: cloudTexture,
+            side: THREE.BackSide,
+            fog: false,
+            depthWrite: false
+        });
+        const sky = new THREE.Mesh(skyGeo, skyMat);
+        sky.renderOrder = -1000;
+        scene.add(sky);
+
+        // ==================== 材质 ====================
+        let groundMaterial;
+        textureLoader.load('Grass.png', (tex) => {
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(4, 4);
+            groundMaterial.map = tex;
+            groundMaterial.needsUpdate = true;
+        }, undefined, () => {});
+        groundMaterial = new THREE.MeshStandardMaterial({ color: 0x5a8f3c, roughness: 0.9, metalness: 0.0 });
+        const wallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture });
+        const houseTopMaterial = new THREE.MeshStandardMaterial({ map: houseTopTexture });
+        const doorMaterial = new THREE.MeshStandardMaterial({ map: doorTexture });
+        const frameMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF });
+        const glassMat = new THREE.MeshStandardMaterial({ color: 0x4488CC, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+
+        // ==================== 地形高度（更大起伏，平坦处更平） ====================
+        function getRawTerrainHeight(x, z) {
+            let h = 0;
+            // 大起伏
+            h += noise.noise2D(x * 0.02, z * 0.02) * 6;
+            h += noise.noise2D(x * 0.05, z * 0.05) * 2.5;
+            // 小起伏（用于草坡细节）
+            h += noise.noise2D(x * 0.12, z * 0.12) * 0.8;
+            // 微起伏（平整化）
+            let micro = noise.noise2D(x * 0.3, z * 0.3) * 0.15;
+            // 平坦化：如果大起伏接近0，则微起伏也趋于0
+            const flatness = Math.abs(h) < 1.5 ? 1.0 : 0.0;
+            h += micro * (1 - flatness * 0.8);
+            return h;
+        }
+
+        function getTerrainHeight(x, z) {
+            for (const house of state.houses) {
+                if (house.contains(x, z)) return house.flatHeight;
+            }
+            return getRawTerrainHeight(x, z);
+        }
+
+        function isInAnyHouse(x, z) {
+            for (const house of state.houses) { if (house.contains(x, z)) return true; }
+            return false;
+        }
+
+        // 检测是否为草坡（较平缓但有轻微起伏的区域）
+        function isGrassSlope(x, z) {
+            const h = getRawTerrainHeight(x, z);
+            const hdx = getRawTerrainHeight(x + 1, z);
+            const hdz = getRawTerrainHeight(x, z + 1);
+            const slope = Math.abs(hdx - h) + Math.abs(hdz - h);
+            return slope > 0.1 && slope < 1.2 && Math.abs(h) < 4;
+        }
+
+        function createGrassTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createLinearGradient(32, 128, 32, 0);
+            grad.addColorStop(0, '#2d5016');
+            grad.addColorStop(0.4, '#4a7c23');
+            grad.addColorStop(0.7, '#6ab04c');
+            grad.addColorStop(1, '#a8e063');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.moveTo(32, 128);
+            ctx.quadraticCurveTo(20, 64, 28, 20);
+            ctx.quadraticCurveTo(32, 5, 36, 20);
+            ctx.quadraticCurveTo(44, 64, 32, 128);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(100,180,50,0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(32, 128);
+            ctx.quadraticCurveTo(30, 70, 32, 30);
+            ctx.stroke();
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            return tex;
+        }
+
+        const grassTexture = createGrassTexture();
+
+        const grassVertexShader = `
+            uniform float uTime;
+            uniform float uSwayStrength;
+            attribute float aScale;
+            attribute float aPhase;
+            attribute vec3 aOffset;
+            varying vec2 vUv;
+            varying float vHeight;
+            void main() {
+                vUv = uv;
+                vHeight = position.y;
+                vec3 pos = position;
+                pos.y *= aScale;
+                float sway = sin(uTime * 1.5 + aPhase + aOffset.x * 0.5 + aOffset.z * 0.3) * uSwayStrength;
+                float sway2 = cos(uTime * 1.2 + aPhase * 1.3 + aOffset.x * 0.3) * uSwayStrength * 0.5;
+                float influence = smoothstep(0.0, 1.0, pos.y / aScale);
+                pos.x += sway * influence;
+                pos.z += sway2 * influence;
+                vec3 worldPos = aOffset + pos;
+                vec4 mvPosition = modelViewMatrix * vec4(worldPos, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        const grassFragmentShader = `
+            uniform sampler2D uTexture;
+            varying vec2 vUv;
+            varying float vHeight;
+            void main() {
+                vec4 tex = texture2D(uTexture, vUv);
+                if (tex.a < 0.3) discard;
+                float darken = 0.7 + 0.3 * vHeight;
+                gl_FragColor = vec4(tex.rgb * darken, tex.a);
+            }
+        `;
+
+        function createWindow(x, y, z, rotY) {
+            const group = new THREE.Group();
+            group.position.set(x, y, z);
+            group.rotation.y = rotY;
+            const w = 1.0, h = 1.0, thick = 0.06;
+            const top = new THREE.Mesh(new THREE.BoxGeometry(w, thick, 0.02), frameMat);
+            top.position.set(0, h/2, 0);
+            const bottom = new THREE.Mesh(new THREE.BoxGeometry(w, thick, 0.02), frameMat);
+            bottom.position.set(0, -h/2, 0);
+            const left = new THREE.Mesh(new THREE.BoxGeometry(thick, h, 0.02), frameMat);
+            left.position.set(-w/2, 0, 0);
+            const right = new THREE.Mesh(new THREE.BoxGeometry(thick, h, 0.02), frameMat);
+            right.position.set(w/2, 0, 0);
+            const midH = new THREE.Mesh(new THREE.BoxGeometry(w, thick*0.5, 0.02), frameMat);
+            const midV = new THREE.Mesh(new THREE.BoxGeometry(thick*0.5, h, 0.02), frameMat);
+            const glass = new THREE.Mesh(new THREE.PlaneGeometry(w-thick*2, h-thick*2), glassMat);
+            group.add(top, bottom, left, right, midH, midV, glass);
+            return group;
+        }
+
+        class Door {
+            constructor(x, y, z, width, height, rotationY, topWallCollider = null) {
+                this.isOpen = false;
+                this.targetRotation = 0;
+                this.width = width;
+                this.height = height;
+                this.topWallCollider = topWallCollider;
+                this.group = new THREE.Group();
+                this.group.position.set(x, y, z);
+                this.group.rotation.y = rotationY;
+                const geo = new THREE.BoxGeometry(width, height, 0.08);
+                const mesh = new THREE.Mesh(geo, doorMaterial);
+                mesh.position.set(width/2, height/2, 0);
+                mesh.castShadow = true;
+                mesh.userData = { type: 'door', door: this };
+                this.group.add(mesh);
+                scene.add(this.group);
+                this.collider = { min: new THREE.Vector3(), max: new THREE.Vector3() };
+                this.updateCollider();
+            }
+            get isCollidable() {
+                return Math.abs(this.group.rotation.y) < 0.05 && this.targetRotation === 0;
+            }
+            updateCollider() {
+                const x = this.group.position.x, y = this.group.position.y, z = this.group.position.z;
+                const w = this.width, h = this.height;
+                this.collider.min.set(x - 0.05, y, z - 0.15);
+                this.collider.max.set(x + w + 0.05, y + h, z + 0.15);
+            }
+            toggle() {
+                this.isOpen = !this.isOpen;
+                this.targetRotation = this.isOpen ? Math.PI / 2 : 0;
+                if (this.topWallCollider) this.topWallCollider.enabled = !this.isOpen;
+            }
+            update(dt) {
+                const diff = this.targetRotation - this.group.rotation.y;
+                if (Math.abs(diff) > 0.01) this.group.rotation.y += diff * Math.min(1, dt * 8);
+            }
+            destroy() { scene.remove(this.group); }
+        }
+
+        class House {
+            constructor(x, z, flatHeight) {
+                this.x = x; this.z = z; this.flatHeight = flatHeight;
+                this.width = 8; this.depth = 8;
+                this.wallHeight = 5.1; this.wallThickness = 0.2;
+                this.doorWidth = 1.2; this.doorHeight = 1.9;
+                this.walls = []; this.doors = []; this.meshes = [];
+            }
+            contains(px, pz) {
+                const hw = this.width / 2 + 0.5;
+                const hdFront = this.depth / 2 + 3;
+                const hdBack = this.depth / 2 + 0.5;
+                return px >= this.x - hw && px <= this.x + hw && pz >= this.z - hdBack && pz <= this.z + hdFront;
+            }
+            build(scene) {
+                const floorY = this.flatHeight;
+                const floorTop = floorY + 0.1;
+                const halfW = this.width / 2;
+                const halfD = this.depth / 2;
+                const t = this.wallThickness;
+                const wh = this.wallHeight;
+                const dw = this.doorWidth;
+                const dh = this.doorHeight;
+
+                const floorGeo = new THREE.BoxGeometry(this.width + 1, 0.1, this.depth + 6);
+                const floor = new THREE.Mesh(floorGeo, houseTopMaterial);
+                floor.position.set(this.x, floorY + 0.05, this.z + 1);
+                floor.receiveShadow = true;
+                scene.add(floor);
+                this.meshes.push(floor);
+
+                const pillarH = wh + 0.2;
+                const pillarGeo = new THREE.BoxGeometry(0.2, pillarH, 0.2);
+                const pillarPos = [
+                    [this.x - halfW + 0.1, this.z - halfD + 0.1],
+                    [this.x + halfW - 0.1, this.z - halfD + 0.1],
+                    [this.x - halfW + 0.1, this.z + halfD - 0.1],
+                    [this.x + halfW - 0.1, this.z + halfD - 0.1],
+                ];
+                for (const [px, pz] of pillarPos) {
+                    const pillar = new THREE.Mesh(pillarGeo, houseTopMaterial);
+                    pillar.position.set(px, floorY + pillarH/2, pz);
+                    pillar.castShadow = true;
+                    pillar.receiveShadow = true;
+                    scene.add(pillar);
+                    this.meshes.push(pillar);
+                }
+
+                this.buildFrontWall(floorTop, halfW, halfD, t, wh, dw, dh);
+                this.buildBackWall(floorTop, halfW, halfD, t, wh);
+                this.buildLeftWall(floorTop, halfW, halfD, t, wh);
+                this.buildRightWall(floorTop, halfW, halfD, t, wh);
+
+                const roofR = (Math.sqrt(2) * Math.max(this.width, this.depth)) / 2 * 1.05;
+                const roofGeo = new THREE.ConeGeometry(roofR, 3, 4);
+                roofGeo.rotateY(Math.PI / 4);
+                const roof = new THREE.Mesh(roofGeo, houseTopMaterial);
+                roof.position.set(this.x, floorTop + wh + 1.5, this.z);
+                roof.castShadow = true;
+                scene.add(roof);
+                this.meshes.push(roof);
+            }
+            buildFrontWall(floorTop, halfW, halfD, t, wh, dw, dh) {
+                const z = this.z + halfD;
+                const sideW = (this.width - dw) / 2;
+                this.addWall(this.x - halfW + sideW/2, floorTop + wh/2, z, sideW, wh, t, 0);
+                this.addWall(this.x + halfW - sideW/2, floorTop + wh/2, z, sideW, wh, t, 0);
+                const topH = wh - dh;
+                const topWallGeo = new THREE.BoxGeometry(dw, topH, t);
+                const vBottom = dh / wh;
+                const vScale = 1 - vBottom;
+                const uvAttr = topWallGeo.attributes.uv;
+                for (let i = 0; i < uvAttr.count; i++) {
+                    const v = uvAttr.getY(i);
+                    uvAttr.setY(i, vBottom + v * vScale);
+                }
+                const topWallMesh = new THREE.Mesh(topWallGeo, wallMaterial);
+                topWallMesh.position.set(this.x, floorTop + dh + topH/2, z);
+                topWallMesh.castShadow = true;
+                topWallMesh.receiveShadow = true;
+                scene.add(topWallMesh);
+                this.meshes.push(topWallMesh);
+                const min = new THREE.Vector3(this.x - dw/2 - 0.1, floorTop + dh, z - t/2 - 0.1);
+                const max = new THREE.Vector3(this.x + dw/2 + 0.1, floorTop + wh, z + t/2 + 0.1);
+                const topWallCollider = { min, max, enabled: true };
+                this.walls.push(topWallCollider);
+                this.doors.push(new Door(this.x - dw/2, floorTop, z + t/2, dw, dh, 0, topWallCollider));
+            }
+            buildBackWall(floorTop, halfW, halfD, t, wh) {
+                const z = this.z - halfD;
+                this.addWall(this.x, floorTop + wh/2, z, this.width, wh, t, 0);
+                const win = createWindow(this.x, floorTop + wh/2, z - t/2 - 0.02, Math.PI);
+                scene.add(win); this.meshes.push(win);
+            }
+            buildLeftWall(floorTop, halfW, halfD, t, wh) {
+                const x = this.x - halfW;
+                this.addWall(x, floorTop + wh/2, this.z, this.depth, wh, t, Math.PI/2);
+                const win = createWindow(0, 0, 0, 0);
+                win.position.set(x - t/2 - 0.02, floorTop + wh/2, this.z);
+                win.rotation.y = -Math.PI/2;
+                scene.add(win); this.meshes.push(win);
+            }
+            buildRightWall(floorTop, halfW, halfD, t, wh) {
+                const x = this.x + halfW;
+                this.addWall(x, floorTop + wh/2, this.z, this.depth, wh, t, Math.PI/2);
+                const win = createWindow(0, 0, 0, 0);
+                win.position.set(x + t/2 + 0.02, floorTop + wh/2, this.z);
+                win.rotation.y = Math.PI/2;
+                scene.add(win); this.meshes.push(win);
+            }
+            addWall(x, y, z, w, h, t, rotY) {
+                const geo = new THREE.BoxGeometry(w, h, t);
+                const mesh = new THREE.Mesh(geo, wallMaterial);
+                mesh.position.set(x, y, z);
+                mesh.rotation.y = rotY;
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+                this.meshes.push(mesh);
+                const min = new THREE.Vector3(), max = new THREE.Vector3();
+                if (Math.abs(rotY) > 0.1) {
+                    min.set(x - t/2 - 0.1, y - h/2, z - w/2 - 0.1);
+                    max.set(x + t/2 + 0.1, y + h/2, z + w/2 + 0.1);
+                } else {
+                    min.set(x - w/2 - 0.1, y - h/2, z - t/2 - 0.1);
+                    max.set(x + w/2 + 0.1, y + h/2, z + t/2 + 0.1);
+                }
+                this.walls.push({ min, max, enabled: true });
+            }
+            destroy() {
+                for (const m of this.meshes) { scene.remove(m); if (m.geometry) m.geometry.dispose(); }
+                for (const d of this.doors) d.destroy();
+                this.meshes = []; this.walls = []; this.doors = [];
+            }
+        }
+
+        class Monster {
+            constructor(x, z) {
+                this.position = new THREE.Vector3(x, getTerrainHeight(x, z), z);
+                const geo = new THREE.PlaneGeometry(1.2, 1.8);
+                const mat = new THREE.MeshStandardMaterial({
+                    map: monsterTexture, transparent: true, side: THREE.DoubleSide, alphaTest: 0.5,
+                    emissive: new THREE.Color(0x000000), emissiveIntensity: 0
+                });
+                this.mesh = new THREE.Mesh(geo, mat);
+                this.mesh.position.copy(this.position);
+                this.mesh.position.y += 0.9;
+                this.mesh.castShadow = true;
+                scene.add(this.mesh);
+                this.radius = 0.4; this.height = 1.8;
+            }
+            update(dt, playerPos, nightIntensity) {
+                const target = camera.position.clone();
+                target.y = this.mesh.position.y;
+                this.mesh.lookAt(target);
+                // 夜晚发光效果（不改变贴图颜色，只是边缘发光）
+                this.mesh.material.emissive.setRGB(nightIntensity * 0.3, 0, 0);
+                this.mesh.material.emissiveIntensity = nightIntensity * 1.5;
+                const dx = playerPos.x - this.position.x;
+                const dz = playerPos.z - this.position.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist < 1.0) { triggerDeath(); return; }
+                if (dist > 0.5 && dist < 80) {
+                    const speed = 3.5;
+                    const nx = this.position.x + (dx/dist) * speed * dt;
+                    const nz = this.position.z + (dz/dist) * speed * dt;
+                    const ny = getTerrainHeight(nx, nz);
+                    if (!this.checkCollision(nx, ny, nz)) {
+                        this.position.set(nx, ny, nz);
+                        this.mesh.position.set(nx, ny + 0.9, nz);
+                    }
+                }
+            }
+            checkCollision(x, y, z) {
+                const min = new THREE.Vector3(x - this.radius, y, z - this.radius);
+                const max = new THREE.Vector3(x + this.radius, y + this.height, z + this.radius);
+                for (const house of state.houses) {
+                    for (const w of house.walls) { if (w.enabled !== false && aabbIntersect(min, max, w.min, w.max)) return true; }
+                    for (const d of house.doors) { if (d.isCollidable && aabbIntersect(min, max, d.collider.min, d.collider.max)) return true; }
+                }
+                return false;
+            }
+            destroy() { scene.remove(this.mesh); }
+        }
+
+        const state = { houses: [], monsters: [], isCrouching: false, cycleTime: 90, isDay: true };
+        const chunks = new Map();
+
+        function createChunk(cx, cz) {
+            const key = `${cx},${cz}`;
+            if (chunks.has(key)) return chunks.get(key);
+            const size = CONFIG.chunkSize;
+            const worldOffsetX = cx * size;
+            const worldOffsetZ = cz * size;
+
+            let house = null;
+            // 先尝试在草坡上生成房子（60%概率）
+            let onSlope = false;
+            if (Math.random() < 0.2) {
+                let hx, hz, flatHeight;
+                if (Math.random() < 0.6) {
+                    // 尝试在草坡上生成
+                    for (let attempt = 0; attempt < 30; attempt++) {
+                        const tx = worldOffsetX + (Math.random() - 0.5) * size * 0.8;
+                        const tz = worldOffsetZ + (Math.random() - 0.5) * size * 0.8;
+                        if (isGrassSlope(tx, tz)) {
+                            hx = tx; hz = tz;
+                            flatHeight = Math.round(getRawTerrainHeight(hx, hz) * 2) / 2;
+                            onSlope = true;
+                            break;
+                        }
+                    }
+                }
+                if (!onSlope) {
+                    hx = worldOffsetX + (Math.random() - 0.5) * size * 0.5;
+                    hz = worldOffsetZ + (Math.random() - 0.5) * size * 0.5;
+                    flatHeight = Math.round(getRawTerrainHeight(hx, hz) * 2) / 2;
+                }
+                house = new House(hx, hz, flatHeight);
+                state.houses.push(house);
+            }
+
+            const seg = 64;
+            const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+            geo.rotateX(-Math.PI / 2);
+            const posAttr = geo.attributes.position;
+            for (let i = 0; i < posAttr.count; i++) {
+                const x = posAttr.getX(i) + worldOffsetX;
+                const z = posAttr.getZ(i) + worldOffsetZ;
+                posAttr.setY(i, getTerrainHeight(x, z));
+            }
+            geo.computeVertexNormals();
+            const mesh = new THREE.Mesh(geo, groundMaterial);
+            mesh.position.set(worldOffsetX, 0, worldOffsetZ);
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+
+            if (house) house.build(scene);
+
+            const grassCount = CONFIG.grassDensity;
+            const grassGeo = new THREE.PlaneGeometry(0.15, 1, 1, 4);
+            grassGeo.translate(0, 0.5, 0);
+            const grassMat = new THREE.ShaderMaterial({
+                vertexShader: grassVertexShader,
+                fragmentShader: grassFragmentShader,
+                uniforms: { uTime: { value: 0 }, uSwayStrength: { value: 0.15 }, uTexture: { value: grassTexture } },
+                side: THREE.DoubleSide, transparent: true, alphaTest: 0.3, depthWrite: false,
+            });
+            const grassMesh = new THREE.InstancedMesh(grassGeo, grassMat, grassCount);
+            grassMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            const offsets = new Float32Array(grassCount * 3);
+            const scales = new Float32Array(grassCount);
+            const phases = new Float32Array(grassCount);
+            const dummy = new THREE.Object3D();
+            let validIdx = 0;
+            for (let i = 0; i < grassCount; i++) {
+                const lx = (Math.random() - 0.5) * size;
+                const lz = (Math.random() - 0.5) * size;
+                const wx = worldOffsetX + lx;
+                const wz = worldOffsetZ + lz;
+                if (isInAnyHouse(wx, wz)) continue;
+                const wy = getTerrainHeight(wx, wz);
+                const scale = CONFIG.grassHeightMin + Math.random() * (CONFIG.grassHeightMax - CONFIG.grassHeightMin);
+                dummy.position.set(wx, wy, wz);
+                dummy.rotation.y = Math.random() * Math.PI * 2;
+                dummy.scale.set(scale, scale, scale);
+                dummy.updateMatrix();
+                grassMesh.setMatrixAt(validIdx, dummy.matrix);
+                offsets[validIdx * 3] = wx;
+                offsets[validIdx * 3 + 1] = wy;
+                offsets[validIdx * 3 + 2] = wz;
+                scales[validIdx] = scale;
+                phases[validIdx] = Math.random() * Math.PI * 2;
+                validIdx++;
+            }
+            grassMesh.count = validIdx;
+            grassGeo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
+            grassGeo.setAttribute('aScale', new THREE.InstancedBufferAttribute(scales, 1));
+            grassGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
+            grassMesh.castShadow = false;
+            grassMesh.receiveShadow = false;
+            scene.add(grassMesh);
+
+            const chunk = { mesh, grassMesh, cx, cz, house };
+            chunks.set(key, chunk);
+            return chunk;
+        }
+
+        function removeChunk(cx, cz) {
+            const key = `${cx},${cz}`;
+            const chunk = chunks.get(key);
+            if (!chunk) return;
+            scene.remove(chunk.mesh);
+            scene.remove(chunk.grassMesh);
+            chunk.mesh.geometry.dispose();
+            chunk.grassMesh.geometry.dispose();
+            chunk.grassMesh.material.dispose();
+            if (chunk.house) {
+                chunk.house.destroy();
+                const idx = state.houses.indexOf(chunk.house);
+                if (idx > -1) state.houses.splice(idx, 1);
+            }
+            chunks.delete(key);
+        }
+
+        function updateChunks(playerX, playerZ) {
+            const r = CONFIG.renderRadius;
+            const cs = CONFIG.chunkSize;
+            const pcx = Math.floor(playerX / cs);
+            const pcz = Math.floor(playerZ / cs);
+            const needed = new Set();
+            for (let dx = -r; dx <= r; dx++) {
+                for (let dz = -r; dz <= r; dz++) {
+                    const cx = pcx + dx, cz = pcz + dz;
+                    needed.add(`${cx},${cz}`);
+                    if (!chunks.has(`${cx},${cz}`)) createChunk(cx, cz);
+                }
+            }
+            for (const [key, chunk] of chunks) {
+                if (!needed.has(key)) removeChunk(chunk.cx, chunk.cz);
+            }
+        }
+
+        function aabbIntersect(min1, max1, min2, max2) {
+            return min1.x < max2.x && max1.x > min2.x && min1.y < max2.y && max1.y > min2.y && min1.z < max2.z && max1.z > min2.z;
+        }
+
+        function checkPlayerCollision(pos) {
+            const r = CONFIG.playerRadius;
+            const h = state.isCrouching ? CONFIG.playerHeight * 0.5 : CONFIG.playerHeight;
+            const pMin = new THREE.Vector3(pos.x - r, pos.y, pos.z - r);
+            const pMax = new THREE.Vector3(pos.x + r, pos.y + h, pos.z + r);
+            for (const house of state.houses) {
+                for (const w of house.walls) { if (w.enabled !== false && aabbIntersect(pMin, pMax, w.min, w.max)) return true; }
+                for (const d of house.doors) { if (d.isCollidable && aabbIntersect(pMin, pMax, d.collider.min, d.collider.max)) return true; }
+            }
+            return false;
+        }
+
+        // ==================== 输入系统 ====================
+        const input = { moveX: 0, moveZ: 0, sprint: false, lookDeltaX: 0, lookDeltaY: 0 };
+        const keys = {};
+        const touches = {};
+        let joystickTouchId = null, lookTouchId = null, sprintTouchId = null, crouchTouchId = null;
+
+        const joystickZone = document.getElementById('joystick-zone');
+        const joystickKnob = document.getElementById('joystick-knob');
+        const sprintBtn = document.getElementById('sprint-btn');
+        const crouchBtn = document.getElementById('crouch-btn');
+        const interactBtn = document.getElementById('interact-btn');
+        const joystickCenter = { x: 0, y: 0 };
+        const joystickMaxDist = 50;
+
+        function getJoystickCenter() {
+            const rect = joystickZone.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+
+        function updateKeyboardMove() {
+            let x = 0, z = 0;
+            if (keys['KeyW'] || keys['ArrowUp']) z -= 1;
+            if (keys['KeyS'] || keys['ArrowDown']) z += 1;
+            if (keys['KeyA'] || keys['ArrowLeft']) x -= 1;
+            if (keys['KeyD'] || keys['ArrowRight']) x += 1;
+            if (joystickTouchId === null) { input.moveX = x; input.moveZ = z; }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { input.sprint = true; sprintBtn.classList.add('active'); }
+            if (e.code === 'ControlLeft') { state.isCrouching = true; crouchBtn.classList.add('active'); }
+            if (e.code === 'KeyF') interact();
+            updateKeyboardMove();
+        });
+        window.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { input.sprint = false; sprintBtn.classList.remove('active'); }
+            if (e.code === 'ControlLeft') { state.isCrouching = false; crouchBtn.classList.remove('active'); }
+            updateKeyboardMove();
+        });
+
+        document.addEventListener('touchstart', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const t = e.changedTouches[i];
+                const tid = t.identifier;
+                const jc = getJoystickCenter();
+                const distJ = Math.hypot(t.clientX - jc.x, t.clientY - jc.y);
+                const sRect = sprintBtn.getBoundingClientRect();
+                const inSprint = t.clientX >= sRect.left && t.clientX <= sRect.right && t.clientY >= sRect.top && t.clientY <= sRect.bottom;
+                const cRect = crouchBtn.getBoundingClientRect();
+                const inCrouch = t.clientX >= cRect.left && t.clientX <= cRect.right && t.clientY >= cRect.top && t.clientY <= cRect.bottom;
+                const iRect = interactBtn.getBoundingClientRect();
+                const inInteract = t.clientX >= iRect.left && t.clientX <= iRect.right && t.clientY >= iRect.top && t.clientY <= iRect.bottom;
+
+                if (joystickTouchId === null && distJ < 120) {
+                    joystickTouchId = tid;
+                    joystickCenter.x = jc.x; joystickCenter.y = jc.y;
+                    updateJoystick(t.clientX, t.clientY);
+                } else if (sprintTouchId === null && inSprint) {
+                    sprintTouchId = tid; input.sprint = true; sprintBtn.classList.add('active');
+                } else if (crouchTouchId === null && inCrouch) {
+                    crouchTouchId = tid; state.isCrouching = true; crouchBtn.classList.add('active');
+                } else if (lookTouchId === null && !inInteract) {
+                    lookTouchId = tid; touches[tid] = { lastX: t.clientX, lastY: t.clientY };
+                }
+            }
+        }, { passive: false });
+
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const t = e.changedTouches[i];
+                const tid = t.identifier;
+                if (tid === joystickTouchId) updateJoystick(t.clientX, t.clientY);
+                else if (tid === lookTouchId) {
+                    const prev = touches[tid];
+                    if (prev) {
+                        input.lookDeltaX += (t.clientX - prev.lastX) * 0.003;
+                        input.lookDeltaY += (t.clientY - prev.lastY) * 0.003;
+                        prev.lastX = t.clientX; prev.lastY = t.clientY;
+                    }
+                }
+            }
+        }, { passive: false });
+
+        document.addEventListener('touchend', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const t = e.changedTouches[i];
+                const tid = t.identifier;
+                const iRect = interactBtn.getBoundingClientRect();
+                const inInteract = t.clientX >= iRect.left && t.clientX <= iRect.right && t.clientY >= iRect.top && t.clientY <= iRect.bottom;
+                if (inInteract) interact();
+                if (tid === joystickTouchId) {
+                    joystickTouchId = null; input.moveX = 0; input.moveZ = 0;
+                    joystickKnob.style.transform = 'translate(0px, 0px)'; updateKeyboardMove();
+                } else if (tid === sprintTouchId) {
+                    sprintTouchId = null; input.sprint = false; sprintBtn.classList.remove('active');
+                } else if (tid === crouchTouchId) {
+                    crouchTouchId = null; state.isCrouching = false; crouchBtn.classList.remove('active');
+                } else if (tid === lookTouchId) {
+                    lookTouchId = null; delete touches[tid];
+                }
+            }
+        });
+
+        document.addEventListener('touchcancel', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const tid = e.changedTouches[i].identifier;
+                if (tid === joystickTouchId) {
+                    joystickTouchId = null; input.moveX = 0; input.moveZ = 0;
+                    joystickKnob.style.transform = 'translate(0px, 0px)'; updateKeyboardMove();
+                } else if (tid === sprintTouchId) {
+                    sprintTouchId = null; input.sprint = false; sprintBtn.classList.remove('active');
+                } else if (tid === crouchTouchId) {
+                    crouchTouchId = null; state.isCrouching = false; crouchBtn.classList.remove('active');
+                } else if (tid === lookTouchId) {
+                    lookTouchId = null; delete touches[tid];
+                }
+            }
+        });
+
+        function updateJoystick(clientX, clientY) {
+            const dx = clientX - joystickCenter.x;
+            const dy = clientY - joystickCenter.y;
+            const dist = Math.hypot(dx, dy);
+            const clamped = Math.min(dist, joystickMaxDist);
+            const ang = Math.atan2(dy, dx);
+            const kx = Math.cos(ang) * clamped;
+            const ky = Math.sin(ang) * clamped;
+            joystickKnob.style.transform = `translate(${kx}px, ${ky}px)`;
+            input.moveX = kx / joystickMaxDist;
+            input.moveZ = ky / joystickMaxDist;
+        }
+
+        let mouseDown = false;
+        document.addEventListener('mousedown', (e) => {
+            if (e.target.closest('#joystick-zone') || e.target.closest('#sprint-btn') ||
+                e.target.closest('#crouch-btn') || e.target.closest('#interact-btn')) return;
+            mouseDown = true;
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (mouseDown) { input.lookDeltaX += e.movementX * 0.003; input.lookDeltaY += e.movementY * 0.003; }
+        });
+        document.addEventListener('mouseup', () => { mouseDown = false; });
+        document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        let interactCooldown = false;
+        function interact() {
+            if (interactCooldown) return;
+            interactCooldown = true;
+            setTimeout(() => { interactCooldown = false; }, 400);
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            // 排除天空，避免天空变黑问题
+            const interactables = [];
+            scene.traverse((obj) => {
+                if (obj !== sky && obj.isMesh && obj.userData.type === 'door') interactables.push(obj);
+            });
+            const intersects = raycaster.intersectObjects(interactables);
+            for (const hit of intersects) {
+                if (hit.object.userData.type === 'door' && hit.distance < 4) {
+                    hit.object.userData.door.toggle();
+                    return;
+                }
+            }
+        }
+
+        interactBtn.addEventListener('click', (e) => { e.preventDefault(); interact(); });
+        crouchBtn.addEventListener('mousedown', () => { state.isCrouching = true; crouchBtn.classList.add('active'); });
+        crouchBtn.addEventListener('mouseup', () => { state.isCrouching = false; crouchBtn.classList.remove('active'); });
+        crouchBtn.addEventListener('mouseleave', () => { state.isCrouching = false; crouchBtn.classList.remove('active'); });
+
+        // ==================== 角色控制 ====================
+        const player = {
+            position: new THREE.Vector3(0, CONFIG.playerHeight, 0),
+            rotationY: 0, rotationX: 0,
+        };
+
+        function updatePlayer(dt) {
+            player.rotationY -= input.lookDeltaX;
+            player.rotationX -= input.lookDeltaY;
+            player.rotationX = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, player.rotationX));
+            input.lookDeltaX = 0; input.lookDeltaY = 0;
+
+            let moveX = input.moveX, moveZ = input.moveZ;
+            moveZ = -moveZ;
+            const len = Math.hypot(moveX, moveZ);
+            if (len > 1) { moveX /= len; moveZ /= len; }
+
+            if (len > 0.05) {
+                const baseSpeed = CONFIG.moveSpeed * (state.isCrouching ? 0.5 : 1);
+                const canSprint = input.sprint && !state.isCrouching;
+                const speed = baseSpeed * (canSprint ? CONFIG.sprintMultiplier : 1);
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0,1,0), player.rotationY);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0,1,0), player.rotationY);
+                const moveDir = new THREE.Vector3().addScaledVector(forward, moveZ).addScaledVector(right, moveX).normalize();
+
+                const testX = player.position.clone();
+                testX.x += moveDir.x * speed * dt;
+                if (!checkPlayerCollision(testX)) player.position.x = testX.x;
+
+                const testZ = player.position.clone();
+                testZ.z += moveDir.z * speed * dt;
+                if (!checkPlayerCollision(testZ)) player.position.z = testZ.z;
+            }
+
+            const terrainH = getTerrainHeight(player.position.x, player.position.z);
+            const eyeH = state.isCrouching ? CONFIG.playerHeight * 0.5 : CONFIG.playerHeight;
+            player.position.y = terrainH + eyeH;
+
+            camera.position.copy(player.position);
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = player.rotationY;
+            camera.rotation.x = player.rotationX;
+        }
+
+        // ==================== 死亡 ====================
+        function triggerDeath() {
+            document.getElementById('death-screen').style.display = 'flex';
+            setTimeout(() => { location.reload(); }, 3000);
+        }
+
+        // ==================== 昼夜循环 ====================
+        const CYCLE_TOTAL = CONFIG.dayDuration + CONFIG.nightDuration;
+
+        function updateDayNight(dt) {
+            state.cycleTime += dt;
+            if (state.cycleTime >= CYCLE_TOTAL) state.cycleTime -= CYCLE_TOTAL;
+            const t = state.cycleTime;
+            let lightPhase;
+            if (t < CONFIG.transitionTime) {
+                lightPhase = t / CONFIG.transitionTime;
+            } else if (t < CONFIG.dayDuration - CONFIG.transitionTime) {
+                lightPhase = 1;
+            } else if (t < CONFIG.dayDuration) {
+                lightPhase = 1 - (t - (CONFIG.dayDuration - CONFIG.transitionTime)) / CONFIG.transitionTime;
+            } else if (t < CYCLE_TOTAL - CONFIG.transitionTime) {
+                lightPhase = 0;
+            } else {
+                lightPhase = (t - (CYCLE_TOTAL - CONFIG.transitionTime)) / CONFIG.transitionTime;
+            }
+
+            dirLight.intensity = 0.05 + lightPhase * 0.95;
+            ambientLight.intensity = 0.03 + lightPhase * 0.47;
+
+            const dayColor = new THREE.Color(0x87CEEB);
+            const nightColor = new THREE.Color(0x050510);
+            const curColor = nightColor.clone().lerp(dayColor, lightPhase);
+            scene.background = curColor;
+            scene.fog.color = curColor;
+
+            // 天空变黑
+            skyMat.color = new THREE.Color(0.05 + lightPhase * 0.95, 0.05 + lightPhase * 0.95, 0.05 + lightPhase * 0.95);
+
+            // 地面变黑
+            const gb = 0.05 + lightPhase * 0.95;
+            groundMaterial.color.setRGB(0.35 * gb, 0.56 * gb, 0.24 * gb);
+
+            const sunAngle = (t / CYCLE_TOTAL) * Math.PI * 2 - Math.PI/2;
+            dirLight.position.set(Math.cos(sunAngle) * 80, Math.sin(sunAngle) * 60 + 20, 30);
+
+            const isDaytime = lightPhase > 0.3;
+            if (!isDaytime && state.isDay) {
+                state.isDay = false;
+                spawnMonsters();
+            } else if (isDaytime && !state.isDay) {
+                state.isDay = true;
+                clearMonsters();
+            }
+
+            return 1 - lightPhase;
+        }
+
+        function spawnMonsters() {
+            const count = 3 + Math.floor(Math.random() * 3);
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const dist = 20 + Math.random() * 20;
+                const x = player.position.x + Math.cos(angle) * dist;
+                const z = player.position.z + Math.sin(angle) * dist;
+                state.monsters.push(new Monster(x, z));
+            }
+        }
+
+        function clearMonsters() {
+            for (const m of state.monsters) m.destroy();
+            state.monsters = [];
+        }
+
+        // ==================== 动画循环 ====================
+        const clock = new THREE.Clock();
+        let lastChunkUpdate = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.1);
+            const time = clock.getElapsedTime();
+
+            updatePlayer(dt);
+            const nightIntensity = updateDayNight(dt);
+
+            if (time - lastChunkUpdate > 0.3) {
+                updateChunks(player.position.x, player.position.z);
+                lastChunkUpdate = time;
+            }
+
+            sky.position.copy(camera.position);
+
+            for (const [, chunk] of chunks) {
+                if (chunk.grassMesh && chunk.grassMesh.material.uniforms) {
+                    chunk.grassMesh.material.uniforms.uTime.value = time;
+                }
+            }
+
+            for (const house of state.houses) {
+                for (const door of house.doors) door.update(dt);
+            }
+
+            for (const monster of state.monsters) {
+                monster.update(dt, player.position, nightIntensity);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        updateChunks(0, 0);
+        animate();
+    </script>
+</body>
+</html>
